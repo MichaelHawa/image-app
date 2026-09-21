@@ -4,15 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Single-page "Image Combiner" app: the user uploads two images, the browser POSTs them to an n8n webhook, and the combined image n8n returns is displayed. Plain static HTML/CSS/vanilla JS — no framework, no build step, no dependencies, no tests. Deployed to Vercel as a static site (Framework: "Other", no build command).
+Single-page "Image Combiner" app: the user uploads two images, the browser POSTs them to a same-origin Vercel function, which forwards them to an n8n webhook and streams back the combined image. Plain static HTML/CSS/vanilla JS plus one Vercel function — no framework, no build step, no dependencies, no test suite. Deployed to Vercel (Framework: "Other", no build command).
 
 ## Commands
 
-- Run locally: `npx serve` from the repo root (serves on http://localhost:3000)
-- Syntax-check JS: `node --check app.js`
+- Run locally: `npx vercel dev` (runs the static page **and** `api/generate.mjs`, loading `.env`). `npx serve` only serves static files, so Generate will 404 under it.
+- Syntax-check JS: `node --check app.js && node --check api/generate.mjs`
 - Deploy: `npx vercel` (or push to GitHub with Vercel import)
 
 ## Architecture
+
+- `api/generate.mjs` is the only server code (Web-standard `export async function POST(request)`). It rejects cross-origin requests, re-validates both uploads (size cap + magic-byte type detection), forwards them to `N8N_WEBHOOK_URL` with an optional `X-Webhook-Secret` header, and streams the image back. Error responses are JSON `{ error }`, and `app.js` shows that message to the user.
+- Secrets live in `.env` (gitignored, excluded by `.vercelignore`); `.env.example` documents them. Production values are set in Vercel project settings. Never put the webhook URL in client code.
+- `vercel.json` sets the function's `maxDuration` and site-wide security headers, including a strict CSP (`connect-src 'self'`, only Google Fonts allowed externally). Adding any external script, style, font or fetch target requires updating the CSP.
+- Upload size: Vercel caps function request bodies at 4.5 MB, so each file is limited to 2 MB (`MAX_UPLOAD_BYTES` in `app.js` must equal `MAX_FILE_BYTES` in `api/generate.mjs`). `prepareImage()` in `app.js` downscales/re-encodes larger files to WebP (JPEG fallback) before sending.
 
 - `index.html` holds all markup; `app.js` binds to it via IDs (`generate`, `error`, `result`, `download`) and `.upload-card[data-slot]` elements. The `data-slot` value (`image1` / `image2`) is used directly as the state key and the multipart field name, so renaming it breaks both.
 - `app.js` uses a single `state` object (`image1`, `image1Preview`, `image2`, `image2Preview`, `generatedImage`, `isGenerating`, `error`) and one `render()` function that syncs the whole DOM from state. Mutate state, then call `render()` — don't touch the DOM elsewhere.
@@ -21,9 +26,9 @@ Single-page "Image Combiner" app: the user uploads two images, the browser POSTs
 
 ## Webhook contract (n8n)
 
-- `POST` to `WEBHOOK_URL` (top of `app.js`) as `multipart/form-data` with fields named exactly `image1` and `image2`. Do not set `Content-Type` manually — the browser must add the multipart boundary.
-- The response is a **binary image, not JSON**; it's read with `response.blob()` and validated by loading it into an `Image` before display.
-- Calls go straight from the browser to n8n, so CORS is handled by the n8n Webhook node's "Allowed Origins" option (currently it echoes the request origin).
+- Browser → `/api/generate` and function → n8n are both `multipart/form-data` with fields named exactly `image1` and `image2`. Never set `Content-Type` manually on a `FormData` body — the boundary must be generated.
+- n8n must respond with a **binary image, not JSON**; the function rejects non-`image/*` responses, and `app.js` reads the result with `response.blob()` and verifies it decodes before display.
+- n8n should authenticate the webhook with Header Auth (`X-Webhook-Secret` = `N8N_WEBHOOK_SECRET`). The browser never talks to n8n directly.
 
 ## Constraints from the spec
 

@@ -1,1 +1,9 @@
+# Keep secrets and repo-only files from being uploaded/served as static files.
+.env
+.env.*
+.git
+.gitignore
+.vercelignore
+CLAUDE.md
+README.md
 Screen Shot*.png
