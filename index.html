@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Combiner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1 class="wordmark">IMAGE COMBINER</h1>
+  </header>
+
+  <main class="container">
+    <p class="subtitle">Upload two images and combine them into one.</p>
+
+    <section class="uploads">
+      <div class="field">
+        <h2 class="label">Image 1</h2>
+        <label class="upload-card" data-slot="image1">
+          <input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden />
+          <div class="empty">
+            <span class="plus" aria-hidden="true">+</span>
+            <span class="empty-title">Upload image</span>
+            <span class="empty-hint">JPG, PNG or WebP</span>
+          </div>
+          <img class="preview" alt="Image 1 preview" hidden />
+          <span class="pill replace" hidden>Replace</span>
+        </label>
+      </div>
+
+      <div class="field">
+        <h2 class="label">Image 2</h2>
+        <label class="upload-card" data-slot="image2">
+          <input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden />
+          <div class="empty">
+            <span class="plus" aria-hidden="true">+</span>
+            <span class="empty-title">Upload image</span>
+            <span class="empty-hint">JPG, PNG or WebP</span>
+          </div>
+          <img class="preview" alt="Image 2 preview" hidden />
+          <span class="pill replace" hidden>Replace</span>
+        </label>
+      </div>
+    </section>
+
+    <div class="actions">
+      <button id="generate" class="primary" type="button" disabled>Generate Image</button>
+      <p id="error" class="error" role="alert"></p>
+    </div>
+
+    <section class="field">
+      <h2 class="label">Generated Image</h2>
+      <div id="result" class="result-card">
+        <p class="placeholder">Your generated image will appear here.</p>
+        <div class="loading" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Generating...</span>
+        </div>
+        <img class="result-img" alt="Generated image" hidden />
+      </div>
+      <a id="download" class="pill download" download="generated-image" hidden>Download</a>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
