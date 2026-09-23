@@ -1,8 +1,10 @@
 // Server-side proxy to the n8n webhook. Keeps the webhook URL and secret out
-// of the browser, and validates uploads before they reach n8n.
+// of the browser, requires a logged-in Supabase user, and validates uploads
+// before they reach n8n.
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // keeps two files under Vercel's 4.5 MB body limit
 const UPSTREAM_TIMEOUT_MS = 110_000; // just under maxDuration in vercel.json
+const AUTH_TIMEOUT_MS = 10_000;
 
 const SIGNATURES = {
   "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
@@ -36,6 +38,26 @@ function isSameOrigin(request) {
   }
 }
 
+// Verifies the request's Supabase access token by asking Supabase Auth who it
+// belongs to. Returns the user, null if the token is missing or invalid, and
+// throws if Supabase can't be reached.
+async function getUser(request) {
+  const header = request.headers.get("authorization") || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) return null;
+
+  const response = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: process.env.SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+    signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
+  });
+  if (response.status === 401 || response.status === 403) return null;
+  if (!response.ok) throw new Error(`Supabase auth returned status ${response.status}`);
+  return response.json();
+}
+
 async function readImage(formData, field) {
   const file = formData.get(field);
   if (!(file instanceof File)) return { error: `Missing ${field}.` };
@@ -55,8 +77,21 @@ export async function POST(request) {
     console.error("N8N_WEBHOOK_URL is not set");
     return error(500, "The image service is not configured.");
   }
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_PUBLISHABLE_KEY) {
+    console.error("SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY is not set");
+    return error(500, "The image service is not configured.");
+  }
 
   if (!isSameOrigin(request)) return error(403, "Forbidden.");
+
+  let user;
+  try {
+    user = await getUser(request);
+  } catch (err) {
+    console.error("Supabase auth check failed:", err);
+    return error(502, "Couldn't verify your login. Please try again.");
+  }
+  if (!user) return error(401, "Please log in to generate images.");
 
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.startsWith("multipart/form-data")) {

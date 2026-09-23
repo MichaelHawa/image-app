@@ -14,13 +14,14 @@ Single-page "Image Combiner" app: the user uploads two images, the browser POSTs
 
 ## Architecture
 
-- `api/generate.mjs` is the only server code (Web-standard `export async function POST(request)`). It rejects cross-origin requests, re-validates both uploads (size cap + magic-byte type detection), forwards them to `N8N_WEBHOOK_URL` with an optional `X-Webhook-Secret` header, and streams the image back. Error responses are JSON `{ error }`, and `app.js` shows that message to the user.
+- Auth is Supabase Auth (email + password, name stored as `user_metadata.full_name`), called from `app.js` over the REST API (`/auth/v1/...`) with no SDK. The session is kept in `localStorage` and refreshed via `getAccessToken()`. The project URL and **publishable** key are hardcoded in `app.js` (safe to expose); the Supabase URL is also in the CSP `connect-src`. Email-confirmation links return to the site with tokens in the URL hash, which `initAuth()` consumes. Never use the secret/service_role key in client code.
+- `api/generate.mjs` is the only server code (Web-standard `export async function POST(request)`). It rejects cross-origin requests, requires a valid Supabase access token (`Authorization: Bearer`, verified against `SUPABASE_URL/auth/v1/user`, 401 otherwise), re-validates both uploads (size cap + magic-byte type detection), forwards them to `N8N_WEBHOOK_URL` with an optional `X-Webhook-Secret` header, and streams the image back. Error responses are JSON `{ error }`, and `app.js` shows that message to the user.
 - Secrets live in `.env` (gitignored, excluded by `.vercelignore`); `.env.example` documents them. Production values are set in Vercel project settings. Never put the webhook URL in client code.
-- `vercel.json` sets the function's `maxDuration` and site-wide security headers, including a strict CSP (`connect-src 'self'`, only Google Fonts allowed externally). Adding any external script, style, font or fetch target requires updating the CSP.
+- `vercel.json` sets the function's `maxDuration` and site-wide security headers, including a strict CSP (`connect-src` is `'self'` plus the Supabase project; otherwise only Google Fonts allowed externally). Adding any external script, style, font or fetch target requires updating the CSP.
 - Upload size: Vercel caps function request bodies at 4.5 MB, so each file is limited to 2 MB (`MAX_UPLOAD_BYTES` in `app.js` must equal `MAX_FILE_BYTES` in `api/generate.mjs`). `prepareImage()` in `app.js` downscales/re-encodes larger files to WebP (JPEG fallback) before sending.
 
 - `index.html` holds all markup; `app.js` binds to it via IDs (`generate`, `error`, `result`, `download`) and `.upload-card[data-slot]` elements. The `data-slot` value (`image1` / `image2`) is used directly as the state key and the multipart field name, so renaming it breaks both.
-- `app.js` uses a single `state` object (`image1`, `image1Preview`, `image2`, `image2Preview`, `generatedImage`, `isGenerating`, `error`) and one `render()` function that syncs the whole DOM from state. Mutate state, then call `render()` — don't touch the DOM elsewhere.
+- `app.js` uses a single `state` object (`image1`, `image1Preview`, `image2`, `image2Preview`, `generatedImage`, `isGenerating`, `error`, plus auth: `session`, `authReady`, `authMode`, `authBusy`, `authError`, `authMessage`) and one `render()` function that syncs the whole DOM from state. Mutate state, then call `render()` — don't touch the DOM elsewhere.
 - Visibility is toggled with the `hidden` attribute; `style.css` enforces it with `[hidden] { display: none !important; }`.
 - Preview and result images are object URLs; old ones are revoked with `URL.revokeObjectURL` when replaced.
 
@@ -35,4 +36,4 @@ Single-page "Image Combiner" app: the user uploads two images, the browser POSTs
 - Accepted uploads: JPEG/JPG, PNG and WebP only (`ALLOWED_TYPES` / `ALLOWED_EXTENSIONS`).
 - Uploaded images must never be cleared on error; duplicate generate requests are blocked via `isGenerating`.
 - Visual style is light, minimal, editorial (modeled on the Rinascente screenshot in the repo): white background, black text, thin borders, pill buttons, uppercase letter-spaced labels, Jost font. Cards side-by-side on desktop, stacked under 720px.
-- MVP scope only — no auth, database, history, prompts, navigation, or extra features.
+- MVP scope only — email/password login is the only account feature; no database tables, history, prompts, navigation, or extra features.

@@ -242,3 +242,152 @@ body {
     width: 100%;
   }
 }
+
+/* Auth */
+
+.site-header {
+  position: relative;
+}
+
+.account {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transform: translateY(-50%);
+}
+
+.account-name {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+button.pill {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.auth-card {
+  max-width: 420px;
+  margin: 24px auto 0;
+}
+
+.tabs {
+  display: flex;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  margin-bottom: -1px;
+  padding: 14px 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+.tab.active {
+  border-bottom-color: var(--text);
+  color: var(--text);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.input-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.input-field input {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.input-field input:focus {
+  border-color: var(--text);
+  outline: none;
+}
+
+.password-wrap {
+  position: relative;
+  display: flex;
+}
+
+.password-wrap input {
+  width: 100%;
+  padding-right: 48px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.password-toggle:hover {
+  color: var(--text);
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.password-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+.auth-form .primary {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.auth-form .error:empty,
+.notice:empty {
+  display: none;
+}
+
+.notice {
+  margin: 0;
+  font-size: 14px;
+}
+
+@media (max-width: 720px) {
+  .account {
+    position: static;
+    justify-content: center;
+    margin-top: 16px;
+    transform: none;
+  }
+}

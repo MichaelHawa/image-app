@@ -34,3 +34,6 @@ Desktop.ini
 .idea/
 *.swp
 *~
+
+.mcp.json
+
