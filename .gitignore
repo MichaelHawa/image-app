@@ -37,3 +37,6 @@ Desktop.ini
 
 .mcp.json
 
+
+# Playwright MCP snapshots/screenshots
+.playwright-mcp/
