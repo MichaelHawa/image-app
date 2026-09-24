@@ -60,17 +60,17 @@
   <main id="paywall" class="container auth" hidden>
     <div class="auth-card paywall">
       <div id="paywall-offer" class="paywall-offer">
-        <h2 class="label">Lifetime access</h2>
-        <p class="price">$9.99</p>
-        <p class="subtitle">One-time payment, then combine as many images as you like.</p>
+        <h2 class="label">Monthly access</h2>
+        <p class="price">$9.99<span class="price-period">/month</span></p>
+        <p class="subtitle">Combine as many images as you like. Cancel anytime.</p>
       </div>
       <p id="paywall-account" class="notice paywall-account"></p>
       <p id="paywall-checking" class="loading" hidden>
         <span class="spinner" aria-hidden="true"></span>
-        <span>Checking your purchase...</span>
+        <span>Checking your subscription...</span>
       </p>
-      <a id="buy" class="primary" href="#">Unlock for $9.99</a>
-      <button id="check-access" class="pill" type="button">I've paid — refresh</button>
+      <a id="buy" class="primary" href="#">Subscribe for $9.99/month</a>
+      <button id="check-access" class="pill" type="button">I've subscribed — refresh</button>
       <p id="paywall-error" class="error" role="alert"></p>
       <p id="paywall-message" class="notice" role="status"></p>
     </div>
@@ -80,7 +80,7 @@
     <p class="subtitle">Upload two images and combine them into one.</p>
     <p id="upload-locked" class="error upload-locked" role="alert" hidden>
       <span id="upload-locked-text"></span>
-      <a id="upload-locked-buy" href="#">Unlock for $9.99</a>
+      <a id="upload-locked-buy" href="#">Subscribe for $9.99/month</a>
     </p>
 
     <section class="uploads">

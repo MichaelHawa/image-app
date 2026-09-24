@@ -1,5 +1,5 @@
 // Server-side proxy to the n8n webhook. Keeps the webhook URL and secret out
-// of the browser, requires a logged-in Supabase user who has paid, and
+// of the browser, requires a logged-in Supabase user with an active subscription, and
 // validates uploads before they reach n8n.
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // keeps two files under Vercel's 4.5 MB body limit
@@ -65,15 +65,15 @@ function supabaseHeaders(token) {
   };
 }
 
-// Whether the user has a paid purchase (written by the stripe-webhook edge
+// Whether the user has an active subscription (written by the Stripe webhook
 // function). Queried with the user's own token, so RLS limits it to their
 // rows. Throws if Supabase can't be reached.
-async function hasPaidAccess(token) {
+async function hasActiveSubscription(token) {
   const response = await fetch(
-    `${process.env.SUPABASE_URL}/rest/v1/purchases?select=id&status=eq.paid&limit=1`,
+    `${process.env.SUPABASE_URL}/rest/v1/subscriptions?select=id&status=in.(active,trialing)&limit=1`,
     { headers: supabaseHeaders(token), signal: AbortSignal.timeout(AUTH_TIMEOUT_MS) },
   );
-  if (!response.ok) throw new Error(`Supabase purchases returned status ${response.status}`);
+  if (!response.ok) throw new Error(`Supabase subscriptions returned status ${response.status}`);
   const rows = await response.json();
   return rows.length > 0;
 }
@@ -116,12 +116,12 @@ export async function POST(request) {
 
   let paid;
   try {
-    paid = await hasPaidAccess(token);
+    paid = await hasActiveSubscription(token);
   } catch (err) {
-    console.error("Supabase purchase check failed:", err);
-    return error(502, "Couldn't verify your purchase. Please try again.");
+    console.error("Supabase subscription check failed:", err);
+    return error(502, "Couldn't verify your subscription. Please try again.");
   }
-  if (!paid) return error(402, "Purchase access to start generating.");
+  if (!paid) return error(402, "Subscribe to start generating.");
 
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.startsWith("multipart/form-data")) {

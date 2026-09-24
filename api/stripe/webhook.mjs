@@ -1,13 +1,14 @@
-// Stripe webhook → public.purchases. Every request is authenticated by its
-// Stripe-Signature header, checked against STRIPE_WEBHOOK_SECRET. Purchases
-// are written with SUPABASE_SERVICE_ROLE_KEY, which bypasses RLS, so this
-// key must stay server-side.
+// Stripe webhook → public.subscriptions. Every request is authenticated by
+// its Stripe-Signature header, checked against STRIPE_WEBHOOK_SECRET.
+// Subscription state is always re-read from the Stripe API (STRIPE_SECRET_KEY)
+// so out-of-order events can't regress it. Rows are written with
+// SUPABASE_SERVICE_ROLE_KEY, which bypasses RLS, so it must stay server-side.
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 // Only checkouts from this payment link grant access.
-const PAYMENT_LINK_ID = "plink_1UInhlRyQhy4BpSmdHRIDsXd";
+const PAYMENT_LINK_ID = "plink_1UJH4uRyQhy4BpSm1Z060dqm";
 const SIGNATURE_TOLERANCE_SECONDS = 300;
-const SUPABASE_TIMEOUT_MS = 10_000;
+const REQUEST_TIMEOUT_MS = 10_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Implements Stripe's scheme: HMAC-SHA256 of "<t>.<payload>", compared with
@@ -26,6 +27,15 @@ function verifySignature(payload, header, secret) {
   });
 }
 
+async function getStripeSubscription(id) {
+  const response = await fetch(`https://api.stripe.com/v1/subscriptions/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Stripe subscription lookup returned status ${response.status}`);
+  return response.json();
+}
+
 // Calls Supabase as service_role. Throws unless the response is OK.
 async function supabase(path, { method = "GET", body, headers = {} } = {}) {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -38,7 +48,7 @@ async function supabase(path, { method = "GET", body, headers = {} } = {}) {
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(SUPABASE_TIMEOUT_MS),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`Supabase ${method} ${path.split("?")[0]} returned status ${response.status}`);
@@ -65,14 +75,23 @@ async function resolveUserId(session) {
   return (await response.json()) ?? null;
 }
 
-async function recordCheckout(session, status) {
-  if (session.payment_link !== PAYMENT_LINK_ID) {
+// The fields of public.subscriptions that mirror Stripe's subscription.
+function subscriptionFields(sub) {
+  // Newer API versions moved current_period_end onto the subscription items.
+  const periodEnd = sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end;
+  return {
+    stripe_customer_id: typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null,
+    status: sub.status,
+    current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+    cancel_at_period_end: !!sub.cancel_at_period_end,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+// Links a new subscription to the user who checked out.
+async function recordCheckout(session) {
+  if (session.payment_link !== PAYMENT_LINK_ID || !session.subscription) {
     console.log("Ignoring checkout from another source:", session.id);
-    return;
-  }
-  if (status === "paid" && session.payment_status !== "paid") {
-    // Async payment methods: wait for checkout.session.async_payment_succeeded.
-    console.log("Checkout not paid yet:", session.id, session.payment_status);
     return;
   }
 
@@ -82,42 +101,36 @@ async function recordCheckout(session, status) {
     throw new Error(`No user for checkout ${session.id}`);
   }
 
-  await supabase("/rest/v1/purchases?on_conflict=stripe_checkout_session_id", {
+  const sub = await getStripeSubscription(session.subscription);
+  await supabase("/rest/v1/subscriptions?on_conflict=stripe_subscription_id", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
     body: {
       user_id: userId,
       email: session.customer_details?.email ?? null,
-      stripe_checkout_session_id: session.id,
-      stripe_payment_intent_id: session.payment_intent ?? null,
-      stripe_customer_id: session.customer ?? null,
-      amount_total: session.amount_total,
-      currency: session.currency,
-      status,
-      updated_at: new Date().toISOString(),
+      stripe_subscription_id: sub.id,
+      ...subscriptionFields(sub),
     },
   });
-  console.log(`Recorded ${status} checkout ${session.id} for user ${userId}`);
+  console.log(`Recorded ${sub.status} subscription ${sub.id} for user ${userId}`);
 }
 
-async function recordRefund(charge) {
-  // Partial refunds keep access; only a full refund revokes it.
-  if (!charge.refunded || !charge.payment_intent) return;
-  await supabase(
-    `/rest/v1/purchases?stripe_payment_intent_id=eq.${encodeURIComponent(charge.payment_intent)}`,
-    {
-      method: "PATCH",
-      headers: { Prefer: "return=minimal" },
-      body: { status: "refunded", updated_at: new Date().toISOString() },
-    },
-  );
-  console.log("Recorded refund for", charge.payment_intent);
+// Renewals, failed payments, cancellations: refresh the row if we have one.
+async function syncSubscription(eventSub) {
+  const sub = await getStripeSubscription(eventSub.id);
+  await supabase(`/rest/v1/subscriptions?stripe_subscription_id=eq.${encodeURIComponent(sub.id)}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: subscriptionFields(sub),
+  });
+  console.log(`Synced subscription ${sub.id}: ${sub.status}`);
 }
 
 export async function POST(request) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret || !process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    console.error("STRIPE_WEBHOOK_SECRET, SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set");
+  if (!secret || !process.env.STRIPE_SECRET_KEY || !process.env.SUPABASE_URL ||
+      !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("STRIPE_WEBHOOK_SECRET, STRIPE_SECRET_KEY, SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set");
     return new Response("Webhook not configured", { status: 500 });
   }
 
@@ -131,14 +144,11 @@ export async function POST(request) {
   try {
     switch (event.type) {
       case "checkout.session.completed":
-      case "checkout.session.async_payment_succeeded":
-        await recordCheckout(event.data.object, "paid");
+        await recordCheckout(event.data.object);
         break;
-      case "checkout.session.async_payment_failed":
-        await recordCheckout(event.data.object, "failed");
-        break;
-      case "charge.refunded":
-        await recordRefund(event.data.object);
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted":
+        await syncSubscription(event.data.object);
         break;
       default:
         console.log("Unhandled event type:", event.type);

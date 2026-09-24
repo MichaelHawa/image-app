@@ -15,8 +15,8 @@ const SUPABASE_KEY = "sb_publishable_djbzQQzl1akRHzQSwevLUg_VdfLDPqA";
 const SESSION_KEY = "image-combiner-session";
 
 // Stripe Payment Link for lifetime access. The stripe-webhook edge function
-// records completed checkouts in the `purchases` table.
-const PAYMENT_LINK_URL = "https://buy.stripe.com/test_4gM3cxeBKgi45mpeZeb3q00";
+// records subscriptions in the `subscriptions` table.
+const PAYMENT_LINK_URL = "https://buy.stripe.com/test_eVq8wR9hqfe0g13eZeb3q01";
 const ACCESS_POLL_INTERVAL_MS = 2000;
 const ACCESS_POLL_ATTEMPTS = 15;
 
@@ -35,7 +35,7 @@ const state = {
   authError: "",
   authMessage: "",
   passwordVisible: false,
-  // null until checked, then "paid" or "none".
+  // null until checked, then "paid" (active subscription) or "none".
   access: null,
   accessChecking: false,
   paywallError: "",
@@ -176,13 +176,13 @@ async function selectOwnRows(path, token) {
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` },
     });
   } catch {
-    throw new Error("Couldn't check your purchase. Please try again.");
+    throw new Error("Couldn't check your subscription. Please try again.");
   }
   if (response.status === 401) {
     endSession("Your session has expired. Please log in again.");
     return null;
   }
-  if (!response.ok) throw new Error("Couldn't check your purchase. Please try again.");
+  if (!response.ok) throw new Error("Couldn't check your subscription. Please try again.");
   return response.json();
 }
 
@@ -192,9 +192,9 @@ async function fetchAccess() {
   const token = await getAccessToken();
   if (!token) return null;
 
-  const purchases = await selectOwnRows("purchases?select=id&status=eq.paid&limit=1", token);
-  if (!purchases) return null;
-  return purchases.length ? "paid" : "none";
+  const subs = await selectOwnRows("subscriptions?select=id&status=in.(active,trialing)&limit=1", token);
+  if (!subs) return null;
+  return subs.length ? "paid" : "none";
 }
 
 function sleep(ms) {
@@ -219,7 +219,7 @@ async function checkAccess({ poll = false } = {}) {
     }
     if (poll && state.session && state.access !== "paid") {
       state.paywallMessage = "We haven't received your payment yet. " +
-        "If you've paid, refresh in a moment.";
+        "If you've subscribed, refresh in a moment.";
     }
   } catch (err) {
     state.paywallError = err.message;
@@ -329,13 +329,13 @@ function isSupported(file) {
   return !file.type && ALLOWED_EXTENSIONS.some((ext) => name.endsWith(ext));
 }
 
-// Uploading needs a paid purchase. Returns false (and tells the user why)
+// Uploading needs an active subscription. Returns false (and tells the user why)
 // if they can't upload yet.
 function canUpload() {
   if (state.access === "paid") return true;
   state.uploadNotice = state.accessChecking || state.access === null
-    ? "Still checking your purchase. Try again in a moment."
-    : "You haven't paid yet. Uploading images requires a one-time $9.99 payment.";
+    ? "Still checking your subscription. Try again in a moment."
+    : "You haven't subscribed yet. Uploading images requires a $9.99/month subscription.";
   render();
   return false;
 }
@@ -461,7 +461,7 @@ async function generate() {
     }
 
     if (response.status === 402) {
-      // No paid purchase (e.g. refunded); images stay in state.
+      // No active subscription (e.g. canceled); images stay in state.
       state.access = "none";
       return;
     }

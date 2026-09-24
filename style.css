@@ -455,3 +455,8 @@ button.pill {
   color: var(--text);
   font-weight: 500;
 }
+
+.price-period {
+  font-size: 18px;
+  color: var(--muted);
+}
