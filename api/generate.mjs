@@ -1,7 +1,6 @@
 // Server-side proxy to the n8n webhook. Keeps the webhook URL and secret out
-// of the browser, requires a logged-in Supabase user who has paid (or is
-// using their one free demo generation), and validates uploads before they
-// reach n8n.
+// of the browser, requires a logged-in Supabase user, and validates uploads
+// before they reach n8n.
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // keeps two files under Vercel's 4.5 MB body limit
 const UPSTREAM_TIMEOUT_MS = 110_000; // just under maxDuration in vercel.json
@@ -59,52 +58,6 @@ async function getUser(request) {
   return response.json();
 }
 
-function supabaseHeaders(token) {
-  return {
-    apikey: process.env.SUPABASE_PUBLISHABLE_KEY,
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-}
-
-// Calls a Postgres function over PostgREST as the user. Throws on failure.
-async function rpc(token, name, body = {}) {
-  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/${name}`, {
-    method: "POST",
-    headers: supabaseHeaders(token),
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`Supabase rpc ${name} returned status ${response.status}`);
-  return response.status === 204 ? null : response.json();
-}
-
-// Whether the user has a paid purchase (written by the stripe-webhook edge
-// function). Queried with the user's own token, so RLS limits it to their
-// rows. Throws if Supabase can't be reached.
-async function hasPaidAccess(token) {
-  const response = await fetch(
-    `${process.env.SUPABASE_URL}/rest/v1/purchases?select=id&status=eq.paid&limit=1`,
-    { headers: supabaseHeaders(token), signal: AbortSignal.timeout(AUTH_TIMEOUT_MS) },
-  );
-  if (!response.ok) throw new Error(`Supabase purchases returned status ${response.status}`);
-  const rows = await response.json();
-  return rows.length > 0;
-}
-
-// Marks a claimed free demo as used, or releases it so the user can retry
-// after a failed generation. Errors are logged, not surfaced.
-async function finishFreeDemo(token, success) {
-  try {
-    await rpc(token, "finish_free_demo", {
-      p_secret: process.env.DEMO_SERVER_SECRET,
-      p_success: success,
-    });
-  } catch (err) {
-    console.error("Couldn't finish free demo:", err);
-  }
-}
-
 async function readImage(formData, field) {
   const file = formData.get(field);
   if (!(file instanceof File)) return { error: `Missing ${field}.` };
@@ -124,9 +77,8 @@ export async function POST(request) {
     console.error("N8N_WEBHOOK_URL is not set");
     return error(500, "The image service is not configured.");
   }
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_PUBLISHABLE_KEY ||
-      !process.env.DEMO_SERVER_SECRET) {
-    console.error("SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY or DEMO_SERVER_SECRET is not set");
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_PUBLISHABLE_KEY) {
+    console.error("SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY is not set");
     return error(500, "The image service is not configured.");
   }
 
@@ -140,15 +92,6 @@ export async function POST(request) {
     return error(502, "Couldn't verify your login. Please try again.");
   }
   if (!user) return error(401, "Please log in to generate images.");
-  const token = request.headers.get("authorization").slice(7);
-
-  let paid;
-  try {
-    paid = await hasPaidAccess(token);
-  } catch (err) {
-    console.error("Supabase purchase check failed:", err);
-    return error(502, "Couldn't verify your purchase. Please try again.");
-  }
 
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.startsWith("multipart/form-data")) {
@@ -167,31 +110,9 @@ export async function POST(request) {
   const image2 = await readImage(formData, "image2");
   if (image2.error) return error(400, image2.error);
 
-  // Unpaid users get one free generation, claimed only once the uploads are
-  // known to be valid.
-  let usingFreeDemo = false;
-  if (!paid) {
-    try {
-      usingFreeDemo = await rpc(token, "claim_free_demo");
-    } catch (err) {
-      console.error("Free demo claim failed:", err);
-      return error(502, "Couldn't verify your purchase. Please try again.");
-    }
-    if (!usingFreeDemo) {
-      return error(402, "You've used your free generation. Unlock unlimited access for $9.99.");
-    }
-  }
-
-  const response = await forwardToN8n(webhookUrl, image1.file, image2.file);
-  if (usingFreeDemo) await finishFreeDemo(token, response.ok);
-  return response;
-}
-
-// Sends both images to n8n and returns the image response, or a JSON error.
-async function forwardToN8n(webhookUrl, image1, image2) {
   const upstreamBody = new FormData();
-  upstreamBody.append("image1", image1);
-  upstreamBody.append("image2", image2);
+  upstreamBody.append("image1", image1.file);
+  upstreamBody.append("image2", image2.file);
 
   const headers = {};
   if (process.env.N8N_WEBHOOK_SECRET) {
