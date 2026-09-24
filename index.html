@@ -64,6 +64,7 @@
         <p class="price">$9.99</p>
         <p class="subtitle">One-time payment, then combine as many images as you like.</p>
       </div>
+      <p id="paywall-account" class="notice paywall-account"></p>
       <p id="paywall-checking" class="loading" hidden>
         <span class="spinner" aria-hidden="true"></span>
         <span>Checking your purchase...</span>
@@ -77,6 +78,10 @@
 
   <main id="app" class="container" hidden>
     <p class="subtitle">Upload two images and combine them into one.</p>
+    <p id="upload-locked" class="error upload-locked" role="alert" hidden>
+      <span id="upload-locked-text"></span>
+      <a id="upload-locked-buy" href="#">Unlock for $9.99</a>
+    </p>
 
     <section class="uploads">
       <div class="field">

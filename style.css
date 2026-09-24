@@ -435,3 +435,23 @@ button.pill {
 .paywall .error:empty {
   display: none;
 }
+
+.paywall-account {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* The upload area sits directly under the paywall for unpaid users. */
+#paywall {
+  padding-bottom: 0;
+}
+
+.upload-locked {
+  margin: -20px 0 28px;
+}
+
+.upload-locked a {
+  margin-left: 6px;
+  color: var(--text);
+  font-weight: 500;
+}

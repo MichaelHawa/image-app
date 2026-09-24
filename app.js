@@ -40,6 +40,8 @@ const state = {
   accessChecking: false,
   paywallError: "",
   paywallMessage: "",
+  // Shown when an unpaid user tries to upload.
+  uploadNotice: "",
 };
 
 const generateBtn = document.getElementById("generate");
@@ -74,6 +76,10 @@ const checkAccessBtn = document.getElementById("check-access");
 const paywallCheckingEl = document.getElementById("paywall-checking");
 const paywallErrorEl = document.getElementById("paywall-error");
 const paywallMessageEl = document.getElementById("paywall-message");
+const paywallAccountEl = document.getElementById("paywall-account");
+const uploadLockedEl = document.getElementById("upload-locked");
+const uploadLockedTextEl = document.getElementById("upload-locked-text");
+const uploadLockedBuyLink = document.getElementById("upload-locked-buy");
 
 function loadSession() {
   try {
@@ -140,6 +146,7 @@ function endSession(message = "") {
   state.access = null;
   state.paywallError = "";
   state.paywallMessage = "";
+  state.uploadNotice = "";
   state.authMode = "login";
   state.authError = "";
   state.authMessage = message;
@@ -322,8 +329,20 @@ function isSupported(file) {
   return !file.type && ALLOWED_EXTENSIONS.some((ext) => name.endsWith(ext));
 }
 
+// Uploading needs a paid purchase. Returns false (and tells the user why)
+// if they can't upload yet.
+function canUpload() {
+  if (state.access === "paid") return true;
+  state.uploadNotice = state.accessChecking || state.access === null
+    ? "Still checking your purchase. Try again in a moment."
+    : "You haven't paid yet. Uploading images requires a one-time $9.99 payment.";
+  render();
+  return false;
+}
+
 function handleFile(slot, file) {
   if (!file) return;
+  if (!canUpload()) return;
   if (!isSupported(file)) {
     state.error = "Unsupported file type. Please upload a JPG, PNG or WebP image.";
     render();
@@ -479,8 +498,10 @@ function render() {
   const signup = state.authMode === "signup";
 
   authEl.hidden = !state.authReady || loggedIn;
+  // Unpaid users still see the upload area, under the paywall; trying to
+  // upload tells them to pay first (see canUpload).
   const paid = state.access === "paid";
-  appEl.hidden = !state.authReady || !loggedIn || !paid;
+  appEl.hidden = !state.authReady || !loggedIn;
   paywallEl.hidden = !state.authReady || !loggedIn || paid;
   accountEl.hidden = !loggedIn;
   if (loggedIn) {
@@ -489,7 +510,8 @@ function render() {
     accountNameEl.textContent = name;
     const params = new URLSearchParams({ client_reference_id: user.id || "" });
     if (user.email) params.set("prefilled_email", user.email);
-    buyLink.href = `${PAYMENT_LINK_URL}?${params}`;
+    buyLink.href = uploadLockedBuyLink.href = `${PAYMENT_LINK_URL}?${params}`;
+    paywallAccountEl.textContent = user.email ? `Logged in as ${user.email}` : "";
     authForm.reset(); // don't leave credentials sitting in the hidden form
     state.passwordVisible = false; // never reopen the form with a password on show
   }
@@ -514,6 +536,10 @@ function render() {
   checkAccessBtn.hidden = state.accessChecking || state.access === "paid";
   paywallErrorEl.textContent = state.paywallError;
   paywallMessageEl.textContent = state.paywallMessage;
+
+  uploadLockedEl.hidden = paid || !state.uploadNotice;
+  uploadLockedTextEl.textContent = state.uploadNotice;
+  uploadLockedBuyLink.hidden = state.access !== "none";
 
   cards.forEach((card) => {
     const slot = card.dataset.slot;
@@ -543,6 +569,11 @@ function render() {
 cards.forEach((card) => {
   const slot = card.dataset.slot;
   const input = card.querySelector("input");
+
+  // Stop the file picker opening for users who haven't paid.
+  card.addEventListener("click", (e) => {
+    if (!canUpload()) e.preventDefault();
+  });
 
   input.addEventListener("change", () => {
     handleFile(slot, input.files[0]);
