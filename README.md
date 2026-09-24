@@ -24,9 +24,9 @@ The browser never talks to n8n directly. The function keeps the webhook URL and 
 |---|---|
 | `index.html`, `style.css`, `app.js` | The page: uploads, previews, generate button, result |
 | `api/generate.mjs` | Server-side proxy to the n8n webhook |
+| `api/stripe-webhook.mjs` | Stripe webhook that records payments in Supabase |
 | `vercel.json` | Function timeout and security headers |
 | `supabase/migrations/` | `purchases` table, RLS and helper functions (already applied) |
-| `supabase/functions/stripe-webhook/` | Edge Function that records Stripe payments (already deployed) |
 | `.env.example` | Template for the required environment variables |
 
 ## Configuration
@@ -38,6 +38,8 @@ Copy `.env.example` to `.env` and fill it in:
 | `N8N_WEBHOOK_URL` | Yes | Production URL of the n8n Webhook node |
 | `N8N_WEBHOOK_SECRET` | Recommended | Sent as the `X-Webhook-Secret` header; must match the n8n Header Auth credential |
 | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` | Yes | Supabase project used to verify logins and purchases |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role/secret key; lets `/api/stripe-webhook` write purchases. Server-only. |
+| `STRIPE_WEBHOOK_SECRET` | Yes | Signing secret (`whsec_...`) of the Stripe webhook endpoint for `/api/stripe-webhook` |
 
 `.env` is gitignored and excluded from Vercel uploads. Never commit it.
 
@@ -82,20 +84,20 @@ The function may run for up to 120 seconds (`maxDuration` in `vercel.json`), and
 Access costs a one-time $9.99, paid through a Stripe Payment Link.
 
 1. A new account signs in immediately (no email confirmation) and sees the paywall. **Unlock** opens the Payment Link (`PAYMENT_LINK_URL` in `app.js`) with `client_reference_id=<user id>` and `prefilled_email`.
-2. Stripe sends `checkout.session.completed` to the `stripe-webhook` Supabase Edge Function, which verifies the signature and inserts a `paid` row into `public.purchases`.
+2. Stripe sends `checkout.session.completed` to `/api/stripe-webhook` (Vercel function), which verifies the signature with `STRIPE_WEBHOOK_SECRET` and inserts a `paid` row into `public.purchases` using `SUPABASE_SERVICE_ROLE_KEY`.
 3. Stripe redirects to `/?checkout=success`, and the app polls `purchases` until the row appears, then shows the generator.
 4. `/api/generate` checks for a `paid` purchase on every request and returns **402** otherwise.
 5. A full refund (`charge.refunded`) sets the row to `refunded`, which removes access.
 
-The webhook signing secret is stored in Supabase Vault as `stripe_webhook_secret`. Only `service_role` can read it, via `public.get_stripe_webhook_secret()`. The Edge Function also only accepts checkouts from the configured payment link (`PAYMENT_LINK_ID` in its source).
+Both secrets are environment variables: `.env.local` locally, Vercel Environment Variables in production. The webhook only accepts checkouts from the configured payment link (`PAYMENT_LINK_ID` in `api/stripe-webhook.mjs`). To test the webhook locally, run `stripe listen --forward-to localhost:3000/api/stripe-webhook` and put the `whsec_...` it prints in `.env.local`.
 
 ### Going live
 
 Everything is currently in Stripe **test mode**. To take real payments:
 
-1. In live mode, create the product ($9.99 one-time), a Payment Link that redirects to `https://<your-domain>/?checkout=success`, and a webhook endpoint pointing to `https://ihbpingtgruvjiudreta.supabase.co/functions/v1/stripe-webhook` with the events `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` and `charge.refunded`.
-2. Replace `PAYMENT_LINK_URL` in `app.js` and `PAYMENT_LINK_ID` in the Edge Function (then redeploy it).
-3. Replace the Vault secret with the live `whsec_...`: `select vault.update_secret((select id from vault.secrets where name = 'stripe_webhook_secret'), 'whsec_...');`
+1. In live mode, create the product ($9.99 one-time), a Payment Link that redirects to `https://<your-domain>/?checkout=success`, and a webhook endpoint pointing to `https://<your-domain>/api/stripe-webhook` with the events `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` and `charge.refunded`.
+2. Replace `PAYMENT_LINK_URL` in `app.js` and `PAYMENT_LINK_ID` in `api/stripe-webhook.mjs`.
+3. Set `STRIPE_WEBHOOK_SECRET` in Vercel to the live endpoint's `whsec_...` and redeploy.
 
 ## Troubleshooting
 
@@ -105,6 +107,6 @@ Everything is currently in Stripe **test mode**. To take real payments:
 | "Image generation failed. Please try again." | n8n returned an error. Check the webhook secret, whether the workflow is active, and the n8n execution log. |
 | "The image service returned an invalid response." | The workflow responded with JSON or text instead of a binary image |
 | "Image generation timed out." | The workflow took longer than 110 seconds |
-| Paywall still shows after paying | The webhook didn't reach Supabase. Check the endpoint's delivery attempts in Stripe and the `stripe-webhook` Edge Function logs. |
+| Paywall still shows after paying | The webhook didn't record the payment. Check the endpoint's delivery attempts in Stripe and the `/api/stripe-webhook` logs in Vercel. |
 | "Purchase access to start generating." | The user has no `paid` row in `purchases` (never paid, or refunded) |
 | Generate returns 404 locally | You're using `npx serve` instead of `npx vercel dev` |
