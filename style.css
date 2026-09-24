@@ -391,3 +391,47 @@ button.pill {
     transform: none;
   }
 }
+
+.paywall {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  text-align: center;
+}
+
+.paywall-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.paywall .label,
+.paywall .subtitle {
+  margin: 0;
+}
+
+.price {
+  margin: 0;
+  font-size: 48px;
+  font-weight: 500;
+}
+
+.paywall .primary {
+  display: block;
+  margin-top: 8px;
+  text-decoration: none;
+}
+
+.paywall .pill {
+  align-self: center;
+}
+
+.paywall .loading {
+  justify-content: center;
+  margin: 0;
+}
+
+.paywall .error:empty {
+  display: none;
+}

@@ -14,6 +14,12 @@ const SUPABASE_URL = "https://ihbpingtgruvjiudreta.supabase.co";
 const SUPABASE_KEY = "sb_publishable_djbzQQzl1akRHzQSwevLUg_VdfLDPqA";
 const SESSION_KEY = "image-combiner-session";
 
+// Stripe Payment Link for lifetime access. The stripe-webhook edge function
+// records completed checkouts in the `purchases` table.
+const PAYMENT_LINK_URL = "https://buy.stripe.com/test_4gM3cxeBKgi45mpeZeb3q00";
+const ACCESS_POLL_INTERVAL_MS = 2000;
+const ACCESS_POLL_ATTEMPTS = 15;
+
 const state = {
   image1: null,
   image1Preview: null,
@@ -29,6 +35,11 @@ const state = {
   authError: "",
   authMessage: "",
   passwordVisible: false,
+  // null until checked, then "paid" or "none".
+  access: null,
+  accessChecking: false,
+  paywallError: "",
+  paywallMessage: "",
 };
 
 const generateBtn = document.getElementById("generate");
@@ -56,6 +67,13 @@ const authMessageEl = document.getElementById("auth-message");
 const accountEl = document.getElementById("account");
 const accountNameEl = document.getElementById("account-name");
 const logoutBtn = document.getElementById("logout");
+const paywallEl = document.getElementById("paywall");
+const paywallOfferEl = document.getElementById("paywall-offer");
+const buyLink = document.getElementById("buy");
+const checkAccessBtn = document.getElementById("check-access");
+const paywallCheckingEl = document.getElementById("paywall-checking");
+const paywallErrorEl = document.getElementById("paywall-error");
+const paywallMessageEl = document.getElementById("paywall-message");
 
 function loadSession() {
   try {
@@ -119,6 +137,9 @@ async function refreshSession(refreshToken) {
 
 function endSession(message = "") {
   saveSession(null);
+  state.access = null;
+  state.paywallError = "";
+  state.paywallMessage = "";
   state.authMode = "login";
   state.authError = "";
   state.authMessage = message;
@@ -136,6 +157,68 @@ async function getAccessToken() {
     if (!err.status) throw err;
     endSession("Your session has expired. Please log in again.");
     return null;
+  }
+}
+
+// Reads rows from a table the user can see through RLS. Returns null if the
+// session ended.
+async function selectOwnRows(path, token) {
+  let response;
+  try {
+    response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new Error("Couldn't check your purchase. Please try again.");
+  }
+  if (response.status === 401) {
+    endSession("Your session has expired. Please log in again.");
+    return null;
+  }
+  if (!response.ok) throw new Error("Couldn't check your purchase. Please try again.");
+  return response.json();
+}
+
+// Returns "paid" or "none" for the logged-in user (see state.access), or null
+// if the session ended. The server enforces the same rule.
+async function fetchAccess() {
+  const token = await getAccessToken();
+  if (!token) return null;
+
+  const purchases = await selectOwnRows("purchases?select=id&status=eq.paid&limit=1", token);
+  if (!purchases) return null;
+  return purchases.length ? "paid" : "none";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Loads the user's access. With `poll`, keeps checking for a while, since
+// Stripe's webhook can land a few seconds after the redirect back here.
+async function checkAccess({ poll = false } = {}) {
+  if (state.accessChecking || !state.session) return;
+  state.accessChecking = true;
+  state.paywallError = "";
+  state.paywallMessage = "";
+  render();
+
+  try {
+    const attempts = poll ? ACCESS_POLL_ATTEMPTS : 1;
+    for (let i = 0; i < attempts && state.session; i++) {
+      if (i > 0) await sleep(ACCESS_POLL_INTERVAL_MS);
+      state.access = await fetchAccess();
+      if (state.access === "paid" || !poll) break;
+    }
+    if (poll && state.session && state.access !== "paid") {
+      state.paywallMessage = "We haven't received your payment yet. " +
+        "If you've paid, refresh in a moment.";
+    }
+  } catch (err) {
+    state.paywallError = err.message;
+  } finally {
+    state.accessChecking = false;
+    render();
   }
 }
 
@@ -160,6 +243,10 @@ async function submitAuth(event) {
       });
       if (data.access_token) {
         saveSession(toSession(data));
+      } else if (data.user && Array.isArray(data.user.identities) && !data.user.identities.length) {
+        // Supabase's response for an email that's already registered.
+        state.authMode = "login";
+        state.authError = "An account with this email already exists. Please log in.";
       } else {
         // Email confirmation is on: no session until the link is clicked.
         state.authMode = "login";
@@ -170,11 +257,17 @@ async function submitAuth(event) {
       saveSession(toSession(data));
     }
   } catch (err) {
-    state.authError = err.message;
+    if (state.authMode === "signup" && /already registered/i.test(err.message)) {
+      state.authMode = "login";
+      state.authError = "An account with this email already exists. Please log in.";
+    } else {
+      state.authError = err.message;
+    }
   } finally {
     state.authBusy = false;
     render();
   }
+  if (state.session) checkAccess();
 }
 
 function resetImages() {
@@ -200,8 +293,13 @@ async function initAuth() {
   const hash = new URLSearchParams(location.hash.slice(1));
   const hashRefreshToken = hash.get("refresh_token");
   const hashError = hash.get("error_description");
-  if (hashRefreshToken || hashError) {
-    history.replaceState(null, "", location.pathname + location.search);
+  // Stripe redirects back here with ?checkout=success after payment.
+  const query = new URLSearchParams(location.search);
+  const returnedFromCheckout = query.get("checkout") === "success";
+  query.delete("checkout");
+  if (hashRefreshToken || hashError || returnedFromCheckout) {
+    const search = query.toString();
+    history.replaceState(null, "", location.pathname + (search ? `?${search}` : ""));
   }
 
   state.session = loadSession();
@@ -215,6 +313,7 @@ async function initAuth() {
 
   state.authReady = true;
   render();
+  if (state.session) checkAccess({ poll: returnedFromCheckout });
 }
 
 function isSupported(file) {
@@ -342,6 +441,12 @@ async function generate() {
       return;
     }
 
+    if (response.status === 402) {
+      // No paid purchase (e.g. refunded); images stay in state.
+      state.access = "none";
+      return;
+    }
+
     if (!response.ok) {
       throw new Error(await readErrorMessage(response));
     }
@@ -374,12 +479,17 @@ function render() {
   const signup = state.authMode === "signup";
 
   authEl.hidden = !state.authReady || loggedIn;
-  appEl.hidden = !state.authReady || !loggedIn;
+  const paid = state.access === "paid";
+  appEl.hidden = !state.authReady || !loggedIn || !paid;
+  paywallEl.hidden = !state.authReady || !loggedIn || paid;
   accountEl.hidden = !loggedIn;
   if (loggedIn) {
     const user = state.session.user || {};
     const name = (user.user_metadata && user.user_metadata.full_name) || user.email || "";
     accountNameEl.textContent = name;
+    const params = new URLSearchParams({ client_reference_id: user.id || "" });
+    if (user.email) params.set("prefilled_email", user.email);
+    buyLink.href = `${PAYMENT_LINK_URL}?${params}`;
     authForm.reset(); // don't leave credentials sitting in the hidden form
     state.passwordVisible = false; // never reopen the form with a password on show
   }
@@ -397,6 +507,13 @@ function render() {
   authSubmit.textContent = state.authBusy ? "Please wait..." : signup ? "Create account" : "Log in";
   authErrorEl.textContent = state.authError;
   authMessageEl.textContent = state.authMessage;
+
+  paywallOfferEl.hidden = state.access !== "none"; // unknown until checked
+  paywallCheckingEl.hidden = !state.accessChecking;
+  buyLink.hidden = state.accessChecking || state.access !== "none";
+  checkAccessBtn.hidden = state.accessChecking || state.access === "paid";
+  paywallErrorEl.textContent = state.paywallError;
+  paywallMessageEl.textContent = state.paywallMessage;
 
   cards.forEach((card) => {
     const slot = card.dataset.slot;
@@ -462,6 +579,7 @@ passwordToggle.addEventListener("click", () => {
 });
 authForm.addEventListener("submit", submitAuth);
 logoutBtn.addEventListener("click", logOut);
+checkAccessBtn.addEventListener("click", () => checkAccess());
 
 render();
 initAuth();
